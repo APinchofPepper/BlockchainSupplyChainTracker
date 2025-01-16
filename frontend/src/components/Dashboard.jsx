@@ -49,12 +49,13 @@ export default function SupplyChainDashboard() {
     if (!history?.length) return null;
 
     const temperatures = [];
-    let totalTransitTime = 0;
     let shippingTimes = [];
     let issues = [];
 
-    const startTime = history[0].timestamp;
-    const endTime = history[history.length - 1].timestamp;
+    // Convert Unix timestamps to milliseconds
+    const startTime = history[0].timestamp * 1000;
+    const endTime = history[history.length - 1].timestamp * 1000;
+    const totalTransitTime = (endTime - startTime) / 1000; // Convert back to seconds for display
     
     history.forEach((event, index) => {
       if (event.additional_data?.temperature) {
@@ -74,15 +75,23 @@ export default function SupplyChainDashboard() {
       }
     });
 
-    totalTransitTime = endTime - startTime;
+    const completedStages = new Set(history.map(e => e.status)).size;
+    const totalStages = 7; // Total number of stages in the supply chain
 
-    const completedStages = history.filter(e => e.status === 'sold_to_customer').length;
-    const totalStages = 7;
+    // Format total transit time
+    let timeDisplay;
+    if (totalTransitTime < 60) {
+      timeDisplay = `${totalTransitTime.toFixed(1)}s`;
+    } else if (totalTransitTime < 3600) {
+      timeDisplay = `${(totalTransitTime / 60).toFixed(1)}m`;
+    } else if (totalTransitTime < 86400) {
+      timeDisplay = `${(totalTransitTime / 3600).toFixed(1)}h`;
+    } else {
+      timeDisplay = `${(totalTransitTime / 86400).toFixed(1)}d`;
+    }
 
     return {
-      avgDeliveryTime: totalTransitTime < 3600 ? 
-        `${(totalTransitTime / 60).toFixed(1)}m` : 
-        `${(totalTransitTime / 3600).toFixed(1)}h`,
+      avgDeliveryTime: timeDisplay,
       tempViolations: temperatures.filter(t => t < 18 || t > 22).length,
       totalStops: history.filter(e => e.status.includes('arrived')).length,
       completionRate: ((completedStages / totalStages) * 100).toFixed(1),
@@ -113,7 +122,8 @@ export default function SupplyChainDashboard() {
   const formatDuration = (seconds) => {
     if (seconds < 60) return `${seconds.toFixed(0)}s`;
     if (seconds < 3600) return `${(seconds / 60).toFixed(1)}m`;
-    return `${(seconds / 3600).toFixed(1)}h`;
+    if (seconds < 86400) return `${(seconds / 3600).toFixed(1)}h`;
+    return `${(seconds / 86400).toFixed(1)}d`;
   };
 
   const handleProductSelect = async (productId) => {
@@ -187,10 +197,12 @@ export default function SupplyChainDashboard() {
   const renderTimeline = () => {
     if (!selectedProduct?.history?.length) return null;
 
-    const validHistory = selectedProduct.history.filter(event => 
-      event && typeof event.timestamp === 'number' && 
-      event.status && event.from && event.to
-    );
+    const validHistory = selectedProduct.history
+      .filter(event => 
+        event && typeof event.timestamp === 'number' && 
+        event.status && event.from && event.to
+      )
+      .sort((a, b) => a.timestamp - b.timestamp); // Ensure chronological order
 
     if (!validHistory.length) return null;
 
@@ -200,48 +212,56 @@ export default function SupplyChainDashboard() {
           <Clock className="mr-2" /> Product Journey
         </h3>
         <div className="space-y-4">
-          {validHistory.map((event, index) => (
-            <div key={index} className={`flex items-start ${
-              event.additional_data?.issue ? 'bg-red-50 p-4 rounded-lg' : ''
-            }`}>
-              <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
-                event.additional_data?.issue ? 'bg-red-100' : 'bg-blue-500'
+          {validHistory.map((event, index) => {
+            const timeDiff = index > 0 ? 
+              event.timestamp - validHistory[index - 1].timestamp : 
+              0;
+              
+            return (
+              <div key={index} className={`flex items-start ${
+                event.additional_data?.issue ? 'bg-red-50 p-4 rounded-lg' : ''
               }`}>
-                {getStatusIcon(event.status, event.additional_data?.issue)}
-              </div>
-              <div className="ml-4 flex-grow">
-                <div className="flex items-center justify-between">
-                  <p className="font-medium">{event.status.replace(/_/g, ' ').toUpperCase()}</p>
-                  {index > 0 && event.timestamp && validHistory[index - 1]?.timestamp && (
-                    <span className="text-sm text-gray-500">
-                      +{formatDuration(event.timestamp - validHistory[index - 1].timestamp)}
-                    </span>
+                <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
+                  event.additional_data?.issue ? 'bg-red-100' : 'bg-blue-500'
+                }`}>
+                  {getStatusIcon(event.status, event.additional_data?.issue)}
+                </div>
+                <div className="ml-4 flex-grow">
+                  <div className="flex items-center justify-between">
+                    <p className="font-medium">{event.status.replace(/_/g, ' ').toUpperCase()}</p>
+                    {index > 0 && (
+                      <span className="text-sm text-gray-500">
+                        +{formatDuration(timeDiff)}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-sm text-gray-500">
+                    From: {event.from} → To: {event.to}
+                  </p>
+                  <p className="text-sm text-gray-500">
+                    {new Date(event.timestamp * 1000).toLocaleString()}
+                  </p>
+                  {event.additional_data?.issue && (
+                    <div className="mt-2 p-2 bg-red-100 rounded text-sm text-red-700">
+                      <p className="font-semibold">
+                        {event.additional_data.issue.type.replace(/_/g, ' ').toUpperCase()}
+                      </p>
+                      <p>{event.additional_data.issue.description}</p>
+                    </div>
+                  )}
+                  {event.additional_data?.temperature && (
+                    <div className={`mt-1 inline-flex items-center px-2 py-1 rounded-full text-xs ${
+                      event.additional_data.temperature < 18 || event.additional_data.temperature > 22
+                        ? 'bg-red-100 text-red-700'
+                        : 'bg-blue-50 text-blue-700'
+                    }`}>
+                      🌡️ {event.additional_data.temperature}°C | 💧 {event.additional_data.humidity}%
+                    </div>
                   )}
                 </div>
-                <p className="text-sm text-gray-500">
-                  From: {event.from} → To: {event.to}
-                </p>
-                <p className="text-sm text-gray-500">
-                  {new Date(event.timestamp * 1000).toLocaleString()}
-                </p>
-                {event.additional_data?.issue && (
-                  <div className="mt-2 p-2 bg-red-100 rounded text-sm text-red-700">
-                    <p className="font-semibold">{event.additional_data.issue.type.replace(/_/g, ' ').toUpperCase()}</p>
-                    <p>{event.additional_data.issue.description}</p>
-                  </div>
-                )}
-                {event.additional_data?.temperature && (
-                  <div className={`mt-1 inline-flex items-center px-2 py-1 rounded-full text-xs ${
-                    event.additional_data.temperature < 18 || event.additional_data.temperature > 22
-                      ? 'bg-red-100 text-red-700'
-                      : 'bg-blue-50 text-blue-700'
-                  }`}>
-                    🌡️ {event.additional_data.temperature}°C | 💧 {event.additional_data.humidity}%
-                  </div>
-                )}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     );
