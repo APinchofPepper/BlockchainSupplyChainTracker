@@ -1,27 +1,32 @@
 import { useState, useEffect } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { 
-  Clock as Timeline,  // Using Clock icon instead of Timeline
-  MapPin, 
-  Package, 
-  Activity, 
-  Search 
+import {
+  Clock,
+  MapPin,
+  Package,
+  Activity,
+  Search,
+  Truck,
+  ThermometerSun,
+  Timer,
+  AlertTriangle,
+  CheckCircle2,
+  ShieldAlert
 } from 'lucide-react';
 
-// Rest of the Dashboard component remains the same
-const Dashboard = () => {
+export default function SupplyChainDashboard() {
   const [products, setProducts] = useState([]);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [kpiData, setKpiData] = useState(null);
+  const [activeTab, setActiveTab] = useState('timeline');
 
   useEffect(() => {
-    // Fetch products from API
     const fetchProducts = async () => {
       try {
         const response = await fetch('http://localhost:8000/chain');
         const data = await response.json();
         
-        // Extract unique products from blockchain transactions
         const uniqueProducts = new Set();
         data.chain.forEach(block => {
           block.transactions.forEach(tx => {
@@ -40,38 +45,200 @@ const Dashboard = () => {
     fetchProducts();
   }, []);
 
+  const calculateKPIs = (history) => {
+    if (!history?.length) return null;
+
+    const temperatures = [];
+    let totalTransitTime = 0;
+    let shippingTimes = [];
+    let issues = [];
+
+    const startTime = history[0].timestamp;
+    const endTime = history[history.length - 1].timestamp;
+    
+    history.forEach((event, index) => {
+      if (event.additional_data?.temperature) {
+        temperatures.push(event.additional_data.temperature);
+      }
+      
+      if (event.additional_data?.issue) {
+        issues.push(event.additional_data.issue);
+      }
+
+      if (event.status.includes('shipped') && index < history.length - 1) {
+        const nextEvent = history[index + 1];
+        if (nextEvent.status.includes('arrived')) {
+          const shippingTime = nextEvent.timestamp - event.timestamp;
+          shippingTimes.push(shippingTime);
+        }
+      }
+    });
+
+    totalTransitTime = endTime - startTime;
+
+    const completedStages = history.filter(e => e.status === 'sold_to_customer').length;
+    const totalStages = 7;
+
+    return {
+      avgDeliveryTime: totalTransitTime < 3600 ? 
+        `${(totalTransitTime / 60).toFixed(1)}m` : 
+        `${(totalTransitTime / 3600).toFixed(1)}h`,
+      tempViolations: temperatures.filter(t => t < 18 || t > 22).length,
+      totalStops: history.filter(e => e.status.includes('arrived')).length,
+      completionRate: ((completedStages / totalStages) * 100).toFixed(1),
+      totalIssues: issues.length
+    };
+  };
+
+  const getStatusIcon = (status, issue) => {
+    if (issue) return <AlertTriangle className="w-4 h-4 text-red-500" />;
+    switch (status) {
+      case 'manufactured':
+        return <Package className="w-4 h-4 text-blue-500" />;
+      case 'quality_check_passed':
+        return <CheckCircle2 className="w-4 h-4 text-green-500" />;
+      case 'shipped_to_distribution':
+      case 'shipped_to_retail':
+        return <Truck className="w-4 h-4 text-purple-500" />;
+      case 'arrived_at_distribution':
+      case 'arrived_at_retail':
+        return <MapPin className="w-4 h-4 text-blue-500" />;
+      case 'sold_to_customer':
+        return <CheckCircle2 className="w-4 h-4 text-green-500" />;
+      default:
+        return <Clock className="w-4 h-4 text-gray-500" />;
+    }
+  };
+
+  const formatDuration = (seconds) => {
+    if (seconds < 60) return `${seconds.toFixed(0)}s`;
+    if (seconds < 3600) return `${(seconds / 60).toFixed(1)}m`;
+    return `${(seconds / 3600).toFixed(1)}h`;
+  };
+
   const handleProductSelect = async (productId) => {
     try {
       const response = await fetch(`http://localhost:8000/product/${productId}`);
       const data = await response.json();
       setSelectedProduct(data);
+      setKpiData(calculateKPIs(data.history));
     } catch (error) {
       console.error('Error fetching product details:', error);
     }
   };
 
+  const renderKPIDashboard = () => {
+    if (!kpiData) return null;
+
+    const cards = [
+      {
+        title: 'Total Time',
+        value: kpiData.avgDeliveryTime,
+        icon: Timer
+      },
+      {
+        title: 'Temperature Alerts',
+        value: kpiData.tempViolations,
+        icon: ThermometerSun,
+        alert: kpiData.tempViolations > 0
+      },
+      {
+        title: 'Supply Chain Issues',
+        value: kpiData.totalIssues,
+        icon: ShieldAlert,
+        alert: kpiData.totalIssues > 0
+      },
+      {
+        title: 'Completion',
+        value: `${kpiData.completionRate}%`,
+        icon: Activity
+      }
+    ];
+
+    return (
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        {cards.map((card, index) => (
+          <div key={index} className={`bg-white rounded-lg shadow p-4 ${
+            card.alert ? 'border-l-4 border-red-500' : ''
+          }`}>
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-medium text-gray-600">{card.title}</h3>
+              <card.icon className={`w-4 h-4 ${
+                card.alert ? 'text-red-500' : 'text-gray-400'
+              }`} />
+            </div>
+            <div className="text-2xl font-bold text-gray-900">{
+              typeof card.value === 'string' && card.value.match(/[hm]$/) ?
+                card.value.replace(/([hm])$/, '') :
+                card.value
+            }{' '}
+              <span className="text-base font-medium text-gray-500">
+                {typeof card.value === 'string' && card.value.match(/[hm]$/) ?
+                  (card.value.endsWith('h') ? 'hours' : 'mins') :
+                  ''}
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
   const renderTimeline = () => {
     if (!selectedProduct?.history?.length) return null;
 
+    const validHistory = selectedProduct.history.filter(event => 
+      event && typeof event.timestamp === 'number' && 
+      event.status && event.from && event.to
+    );
+
+    if (!validHistory.length) return null;
+
     return (
-      <div className="p-4 bg-white rounded-lg shadow">
+      <div className="bg-white rounded-lg shadow p-4">
         <h3 className="text-lg font-semibold mb-4 flex items-center">
-          <Timeline className="mr-2" /> Product Journey
+          <Clock className="mr-2" /> Product Journey
         </h3>
         <div className="space-y-4">
-          {selectedProduct.history.map((event, index) => (
-            <div key={index} className="flex items-start">
-              <div className="flex-shrink-0 w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center">
-                <MapPin className="w-4 h-4 text-white" />
+          {validHistory.map((event, index) => (
+            <div key={index} className={`flex items-start ${
+              event.additional_data?.issue ? 'bg-red-50 p-4 rounded-lg' : ''
+            }`}>
+              <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
+                event.additional_data?.issue ? 'bg-red-100' : 'bg-blue-500'
+              }`}>
+                {getStatusIcon(event.status, event.additional_data?.issue)}
               </div>
-              <div className="ml-4">
-                <p className="font-medium">{event.status.replace(/_/g, ' ').toUpperCase()}</p>
+              <div className="ml-4 flex-grow">
+                <div className="flex items-center justify-between">
+                  <p className="font-medium">{event.status.replace(/_/g, ' ').toUpperCase()}</p>
+                  {index > 0 && event.timestamp && validHistory[index - 1]?.timestamp && (
+                    <span className="text-sm text-gray-500">
+                      +{formatDuration(event.timestamp - validHistory[index - 1].timestamp)}
+                    </span>
+                  )}
+                </div>
                 <p className="text-sm text-gray-500">
                   From: {event.from} → To: {event.to}
                 </p>
                 <p className="text-sm text-gray-500">
                   {new Date(event.timestamp * 1000).toLocaleString()}
                 </p>
+                {event.additional_data?.issue && (
+                  <div className="mt-2 p-2 bg-red-100 rounded text-sm text-red-700">
+                    <p className="font-semibold">{event.additional_data.issue.type.replace(/_/g, ' ').toUpperCase()}</p>
+                    <p>{event.additional_data.issue.description}</p>
+                  </div>
+                )}
+                {event.additional_data?.temperature && (
+                  <div className={`mt-1 inline-flex items-center px-2 py-1 rounded-full text-xs ${
+                    event.additional_data.temperature < 18 || event.additional_data.temperature > 22
+                      ? 'bg-red-100 text-red-700'
+                      : 'bg-blue-50 text-blue-700'
+                  }`}>
+                    🌡️ {event.additional_data.temperature}°C | 💧 {event.additional_data.humidity}%
+                  </div>
+                )}
               </div>
             </div>
           ))}
@@ -88,13 +255,14 @@ const Dashboard = () => {
       .map(event => ({
         time: new Date(event.timestamp * 1000).toLocaleTimeString(),
         temperature: event.additional_data.temperature,
-        humidity: event.additional_data.humidity
+        humidity: event.additional_data.humidity,
+        hasIssue: event.additional_data?.issue ? 1 : 0
       }));
 
     if (!metrics.length) return null;
 
     return (
-      <div className="p-4 bg-white rounded-lg shadow">
+      <div className="bg-white rounded-lg shadow p-4">
         <h3 className="text-lg font-semibold mb-4 flex items-center">
           <Activity className="mr-2" /> Environmental Metrics
         </h3>
@@ -113,6 +281,15 @@ const Dashboard = () => {
                 dataKey="temperature"
                 stroke="#8884d8"
                 name="Temperature (°C)"
+                dot={({ cx, cy, payload }) => {
+                  if (!cx || !cy || !payload?.temperature) return null;
+                  const isAlert = payload.temperature < 18 || payload.temperature > 22;
+                  return isAlert ? (
+                    <circle cx={cx} cy={cy} r={4} fill="#EF4444" />
+                  ) : (
+                    <circle cx={cx} cy={cy} r={3} fill="#8884d8" />
+                  );
+                }}
               />
               <Line
                 yAxisId="right"
@@ -128,6 +305,7 @@ const Dashboard = () => {
     );
   };
 
+  // Rest of the component remains the same...
   return (
     <div className="p-6 max-w-6xl mx-auto">
       <div className="mb-6">
@@ -153,7 +331,7 @@ const Dashboard = () => {
         
         <div className="mt-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
           {products
-            .filter(id => id.includes(searchQuery))
+            .filter(id => id.toLowerCase().includes(searchQuery.toLowerCase()))
             .map(productId => (
               <button
                 key={productId}
@@ -171,13 +349,30 @@ const Dashboard = () => {
       </div>
 
       {selectedProduct && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {renderTimeline()}
-          {renderMetrics()}
-        </div>
+        <>
+          {renderKPIDashboard()}
+          <div className="mb-4">
+            <div className="border-b border-gray-200">
+              <nav className="-mb-px flex space-x-8">
+                <button
+                  onClick={() => setActiveTab('timeline')}
+                  className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                    activeTab === 'timeline'
+                      ? 'border-blue-500 text-blue-600'
+                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  }`}
+                >
+                  Metrics
+                </button>
+              </nav>
+            </div>
+          </div>
+
+          <div className="mt-4">
+            {activeTab === 'timeline' ? renderTimeline() : renderMetrics()}
+          </div>
+        </>
       )}
     </div>
   );
 };
-
-export default Dashboard;
